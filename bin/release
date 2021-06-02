@@ -32,22 +32,23 @@ function cloneRepository(SymfonyStyle $ui, string $directory, string $branch, st
     $ui->text(\sprintf('Finished cloning repository "%s".', $repository));
 }
 
-function getNewTag(SymfonyStyle $ui, string $directory, string $branch, string $latestTag): ?string
+function getNewTag(SymfonyStyle $ui, string $directory, string $branch, string $previousTag): ?string
 {
-    if ($latestTag) {
-        $parts = \explode('.', $latestTag, 3);
+    $newTag = null;
+    if ($previousTag) {
+        $parts = \explode('.', $previousTag, 3);
 
-        $latestTag = $parts[0] . '.' . $parts[1] . '.' . (++$parts[2]);
+        $newTag = $parts[0] . '.' . $parts[1] . '.' . (++$parts[2]);
     }
 
     do {
-        $latestTag = $ui->ask(\sprintf('Which is the new tag for branch "%s"?', $branch), $latestTag);
-    } while(!$latestTag);
+        $newTag = $ui->ask(\sprintf('Which is the new tag for branch "%s"?', $branch), $newTag);
+    } while(!$newTag);
 
-    return $latestTag;
+    return $newTag;
 }
 
-function getLatestTag(SymfonyStyle $ui, string $directory, string $branch): ?string
+function getPreviousTag(SymfonyStyle $ui, string $directory, string $branch): ?string
 {
     $process = Process::fromShellCommandline('git tag --list', $directory);
     $process->run();
@@ -64,20 +65,20 @@ function getLatestTag(SymfonyStyle $ui, string $directory, string $branch): ?str
         $equalTags = $tags;
     }
 
-    $latestTag = null;
+    $previousTag = null;
     foreach ($equalTags as $equalTag) {
-        if ($latestTag === null || version_compare($latestTag, $equalTag, '<')) {
-            $latestTag = $equalTag;
+        if ($previousTag === null || version_compare($previousTag, $equalTag, '<')) {
+            $previousTag = $equalTag;
         }
     }
 
-    if ($latestTag) {
+    if ($previousTag) {
         do {
-            $latestTag = $ui->ask(\sprintf('Which is the previous tagged version?'), $latestTag);
-        } while(!$latestTag);
+            $previousTag = $ui->ask(\sprintf('Which is the previous tagged version?'), $previousTag);
+        } while(!$previousTag);
     }
 
-    return $latestTag;
+    return $previousTag;
 }
 
 function setTag(SymfonyStyle $ui, string $directory, string $branch, $tag): void
@@ -136,8 +137,8 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
         }
 
         $ui->section(\sprintf('Tagging branch %s:', $branch));
-        $latestTag = getLatestTag($ui, $suluDirectory, $branch);
-        $newTag = getNewTag($ui, $suluDirectory, $branch, $latestTag);
+        $previousTag = getPreviousTag($ui, $suluDirectory, $branch);
+        $newTag = getNewTag($ui, $suluDirectory, $branch, $previousTag);
         setTag($ui, $suluDirectory, $branch, $newTag);
 
         if ('y' !== \strtolower($ui->ask(\sprintf('Push tag "%s" on "%s" to remote?', $newTag, $branch), 'y'))) {
@@ -146,8 +147,15 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
             return 0;
         }
 
+        $ui->info(\sprintf(
+            'To generate the changelog run:' . \PHP_EOL . \PHP_EOL . 'bin/generate-changelog %s %s...%s',
+            $repository,
+            $previousTag,
+            $dryRun ? $branch : $newTag
+        ));
+
         if ($dryRun) {
-            $ui->text('Tag created but not pushed.');
+            $ui->writeln('Tag created but not pushed.');
 
             return 0;
         }
