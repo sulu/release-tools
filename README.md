@@ -12,7 +12,7 @@ bin/release sulu/sulu 2.x
 
 ## Generate Changelog
 
-To tag a new version on a specific branch the following command can be used:
+To generate a changelog for a new created tag the following command can be used:
 
 ```bash
 bin/generate-changelog sulu/sulu 2.2.10...2.3.0
