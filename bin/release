@@ -1,0 +1,156 @@
+#!/usr/bin/env php
+<?php
+
+use Symfony\Component\Console\Input\InputArgument;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\SingleCommandApplication;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Process\Process;
+
+require __DIR__.'/../vendor/autoload.php';
+
+function cloneRepository(SymfonyStyle $ui, string $directory, string $branch, string $repository): void
+{
+    $filesystem = new Filesystem();
+    if ($filesystem->exists($directory)) {
+        $filesystem->remove($directory);
+    }
+
+    $ui->section(\sprintf('Cloning repository "%s":', $repository));
+    (Process::fromShellCommandline(
+        \sprintf(
+            'git clone git@github.com:%s.git --branch %s %s',
+            $repository,
+            $branch,
+            $directory
+        )
+    ))->run();
+
+    $ui->text(\sprintf('Finished cloning repository "%s".', $repository));
+}
+
+function getNewTag(SymfonyStyle $ui, string $directory, string $branch, string $latestTag): ?string
+{
+    if ($latestTag) {
+        $parts = \explode('.', $latestTag, 3);
+
+        $latestTag = $parts[0] . '.' . $parts[1] . '.' . (++$parts[2]);
+    }
+
+    do {
+        $latestTag = $ui->ask(\sprintf('Which is the new tag for branch "%s"?', $branch), $latestTag);
+    } while(!$latestTag);
+
+    return $latestTag;
+}
+
+function getLatestTag(SymfonyStyle $ui, string $directory, string $branch): ?string
+{
+    $process = Process::fromShellCommandline('git tag --list', $directory);
+    $process->run();
+    $tags = explode(\PHP_EOL, $process->getOutput());
+
+    $equalTags = [];
+    foreach ($tags as $tag) {
+        if (0 === \strpos($tag, $branch)) {
+            $equalTags[] = $tag;
+        }
+    }
+
+    if (empty($equalTags)) {
+        $equalTags = $tags;
+    }
+
+    $latestTag = null;
+    foreach ($equalTags as $equalTag) {
+        if ($latestTag === null || version_compare($latestTag, $equalTag, '<')) {
+            $latestTag = $equalTag;
+        }
+    }
+
+    if ($latestTag) {
+        do {
+            $latestTag = $ui->ask(\sprintf('Which is the previous tagged version?'), $latestTag);
+        } while(!$latestTag);
+    }
+
+    return $latestTag;
+}
+
+function setTag(SymfonyStyle $ui, string $directory, string $branch, $tag): void
+{
+    $ui->section(\sprintf('Set tag "%s" on %s:', $tag, $branch));
+    $process = Process::fromShellCommandline(\sprintf('git tag %s', $tag), $directory);
+    $process->run();
+    $ui->text(\sprintf('Use tag "%s".', $tag));
+}
+
+function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): void
+{
+    $ui->section(\sprintf('Push tag "%s" on %s:', $tag, $branch));
+    $process = Process::fromShellCommandline(\sprintf('git push origin %s', $tag), $directory);
+    $process->run();
+    $ui->success(\sprintf('Pushed tag "%s".', $tag));
+}
+
+(new SingleCommandApplication())
+    ->setVersion('1.0.0')
+    ->setName('Release Script')
+    ->addArgument('repository', InputArgument::REQUIRED)
+    ->addArgument('branch', InputArgument::REQUIRED)
+    ->addOption('--dry-run', null, InputOption::VALUE_NONE)
+    ->setCode(function (InputInterface $input, OutputInterface $output) {
+        $ui = new SymfonyStyle($input, $output);
+        $repository = $input->getArgument('repository');
+        $branch = $input->getArgument('branch');
+        $dryRun = $input->getOption('dry-run');
+
+        $ui->section('Configuration');
+
+        if ('y' !== \strtolower($ui->ask(\sprintf('Create tags for branch "%s"?', $branch), 'y'))) {
+            $ui->text('Canceled by user.');
+
+            return 0;
+        }
+
+        $ui->text(\sprintf('Start tagging "%s" branch.', $branch));
+
+        $directory = dirname(__DIR__) . '/var/releases/' . $branch;
+        $suluDirectory = $directory . '/' . $repository;
+
+        cloneRepository($ui, $suluDirectory, $branch, $repository);
+
+        if ('y' !== \strtolower($ui->ask(\sprintf('Is the UPGRADE.md up to date?'), 'y'))) {
+            $ui->text('Canceled by user.');
+
+            return 0;
+        }
+
+        if ('y' !== \strtolower($ui->ask(\sprintf('Is the composer.json up to date and does not contain dev dependencies?'), 'y'))) {
+            $ui->text('Canceled by user.');
+
+            return 0;
+        }
+
+        $ui->section(\sprintf('Tagging branch %s:', $branch));
+        $latestTag = getLatestTag($ui, $suluDirectory, $branch);
+        $newTag = getNewTag($ui, $suluDirectory, $branch, $latestTag);
+        setTag($ui, $suluDirectory, $branch, $newTag);
+
+        if ('y' !== \strtolower($ui->ask(\sprintf('Push tag "%s" on "%s" to remote?', $newTag, $branch), 'y'))) {
+            $ui->text('Canceled by user.');
+
+            return 0;
+        }
+
+        if ($dryRun) {
+            $ui->text('Tag created but not pushed.');
+
+            return 0;
+        }
+
+        pushTag($ui, $suluDirectory, $branch, $newTag);
+    })->run();

@@ -1,0 +1,102 @@
+#!/usr/bin/env php
+<?php
+
+use Symfony\Component\Console\Input\InputArgument;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\SingleCommandApplication;
+use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\HttpClient\HttpClient;
+
+require __DIR__.'/../vendor/autoload.php';
+
+function getChangelog(SymfonyStyle $ui, string $repository, $range): string
+{
+    /** @var string $futureVersion */
+    $futureVersion = explode('...', $range)[1];
+    $changelog = 'Release ' . $futureVersion . ' (' . date ('Y-m-d') . ')';
+
+    $changelog .= PHP_EOL . PHP_EOL;
+
+    $links = [];
+
+    if ($releaseBlogUrl = $ui->ask(\sprintf('Release Blog Url: '))) {
+        $links[] = '[Release Blog](' . $releaseBlogUrl . ')';
+    }
+
+    if (\in_array($repository, ['sulu/sulu', 'sulu/skeleton'])) {
+        $links[] = '[Upgrade Guide](https://docs.sulu.io/en/latest/upgrades/upgrade-2.x.html)';
+    }
+
+    if (\in_array($repository, ['sulu/sulu', 'sulu/skeleton'])) {
+        $links[] = '[Skeleton Adjustments](https://github.com/sulu/skeleton/compare/' . $range . ')';
+    }
+
+    if ($ui->ask(\sprintf('Has Breaking Changes?'))) {
+        $links[] = '[Breaking Changes](https://github.com/' . $repository . '/blob/' . $futureVersion . '/UPGRADE.md)';
+    }
+
+    $links[] = '[Full Changelog](https://github.com/' . $repository . '/compare/' . $range . ')';
+
+    $changelog .= implode(' | ', $links);
+    $changelog .= PHP_EOL . PHP_EOL;
+
+    $client = HttpClient::create();
+
+    $url = \sprintf('https://api.github.com/repos/%s/compare/%s', $repository, $range);
+    $response = $client->request('GET', $url);
+
+    if (200 !== $response->getStatusCode()) {
+        throw new \RuntimeException(\sprintf('Could not load data from "%s".', $url));
+    }
+
+    $jsonString = $response->getContent();
+    $data = \json_decode($jsonString, true);
+    $commits = $data['commits'];
+
+    $lines = [];
+    foreach ($commits as $commit) {
+        $message = \explode("\n", $commit['commit']['message'], 2)[0];
+
+        if (0 === \strpos($message, 'Merge branch \'')
+            || 0 === \strpos($message, 'Merge remote-tracking branch \'')
+        ) {
+            continue;
+        }
+
+        if (isset($commit['author']['login'])) {
+            $author = '@' . $commit['author']['login'];
+        } else {
+            // no github account connect to commit email address
+            $author = $commit['commit']['author']['name'];
+        }
+
+        // replace #issue-number with sulu/sulu#issue-number so the changelog can also be used for sulu/skeleton
+        $message = \str_replace('#', $repository . '#', $message);
+
+        $lines[] = \sprintf(' - %s (%s)', $message, $author);
+    }
+
+    $lines = \array_reverse($lines);
+
+    $changelog .= implode(PHP_EOL, $lines);
+
+    return $changelog;
+}
+
+(new SingleCommandApplication())
+    ->setVersion('1.0.0')
+    ->setName('Generate Script')
+    ->addArgument('repository', InputArgument::REQUIRED)
+    ->addArgument('range', InputArgument::REQUIRED)
+    ->addOption('--dry-run', null, InputOption::VALUE_NONE)
+    ->setCode(function (InputInterface $input, OutputInterface $output) {
+        $ui = new SymfonyStyle($input, $output);
+        $repository = $input->getArgument('repository');
+        $range = $input->getArgument('range');
+
+        $changelog = getChangelog($ui, $repository, $range);
+
+        $output->write($changelog);
+    })->run();
