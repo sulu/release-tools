@@ -111,13 +111,13 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
 
         $ui->section('Configuration');
 
-        if ('y' !== \strtolower($ui->ask(\sprintf('Create new release for branch "%s"?', $branch), 'y'))) {
+        if ('y' !== \strtolower($ui->ask(\sprintf('Create tags for branch "%s"?', $branch), 'y'))) {
             $ui->text('Canceled by user.');
 
             return 0;
         }
 
-        $ui->text(\sprintf('Start creating release for "%s" branch.', $branch));
+        $ui->text(\sprintf('Start tagging "%s" branch.', $branch));
 
         $directory = dirname(__DIR__) . '/var/releases/' . $branch;
         $suluDirectory = $directory . '/' . $repository;
