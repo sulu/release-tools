@@ -33,7 +33,7 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
         $links[] = '[Skeleton Adjustments](https://github.com/sulu/skeleton/compare/' . $range . ')';
     }
 
-    if ($ui->ask(\sprintf('Has Breaking Changes?'))) {
+    if ('n' !== \strtolower($ui->ask(\sprintf('Has Breaking Changes?'), 'n'))) {
         $links[] = '[Breaking Changes](https://github.com/' . $repository . '/blob/' . $futureVersion . '/UPGRADE.md)';
     }
 
@@ -98,5 +98,5 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
 
         $changelog = getChangelog($ui, $repository, $range);
 
-        $output->write($changelog);
+        $output->writeln($changelog);
     })->run();
