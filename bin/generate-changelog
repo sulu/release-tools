@@ -7,7 +7,10 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\SingleCommandApplication;
 use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\HttpClient\Exception\ClientException;
+use Symfony\Component\HttpClient\Exception\ServerException;
 use Symfony\Component\HttpClient\HttpClient;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 require __DIR__.'/../vendor/autoload.php';
 
@@ -43,7 +46,7 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
     $changelog .= PHP_EOL . PHP_EOL;
 
     $lines = [];
-    $authors = [];
+    $contributors = [];
     foreach (getCommits($repository, $range) as $commit) {
         $message = \explode("\n", $commit['commit']['message'], 2)[0];
 
@@ -54,44 +57,94 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
         }
 
         if (isset($commit['author']['login'])) {
-            $author = '@' . $commit['author']['login'];
+            $contributor = '@' . $commit['author']['login'];
         } else {
             // no github account connect to commit email address
-            $author = $commit['commit']['author']['name'];
+            $contributor = $commit['commit']['author']['name'];
         }
 
-        $authors[] = $author;
+        $contributors[strtolower($contributor)] = $contributor;
 
         // replace #issue-number with sulu/sulu#issue-number so the changelog can also be used for sulu/skeleton
         $message = \str_replace('#', $repository . '#', $message);
 
-        $lines[] = \sprintf(' - %s (%s)', $message, $author);
+        $lines[] = \sprintf(' - %s (%s)', $message, $contributor);
     }
 
     $lines = \array_reverse($lines);
-    $authors = \array_unique($authors);
-    \sort($authors);
 
     $changelog .= implode(PHP_EOL, $lines);
 
     if ('n' !== \strtolower($ui->ask(\sprintf('Show stats (merged pull requests, contributers)?'), 'n'))) {
+        $client = getClient();
+
+        $url = \sprintf(
+            'https://api.github.com/orgs/%s/members',
+            explode('/', $repository)[0],
+        );
+
+        $response = $client->request('GET', $url);
+
+        if (200 !== $response->getStatusCode()) {
+            throw new \RuntimeException(\sprintf('Could not load data from "%s".', $url));
+        }
+
+        $jsonString = $response->getContent();
+        $members = \json_decode($jsonString, true);
+
+        $coreContributers = [];
+        foreach ($members as $member) {
+            $username = '@' . $member['login'];
+            if (isset($contributors[strtolower($username)])) {
+                unset($contributors[strtolower($username)]);
+                $coreContributers[strtolower($username)] = $username;
+            }
+        }
+
+        \ksort($contributors);
+        \ksort($coreContributers);
+
         $changelog .= PHP_EOL;
         $changelog .= PHP_EOL . 'Merged Pull Requests: ' . count($lines);
         $changelog .= PHP_EOL;
-        $changelog .= PHP_EOL . 'Contributers: ' . count($authors);
+        $changelog .= PHP_EOL . 'External Contributers: ' . count($contributors);
         $changelog .= PHP_EOL;
-        $changelog .= '  ' . implode(PHP_EOL . '   ', $authors);
+        $changelog .= PHP_EOL;
+        $changelog .= implode(PHP_EOL, $contributors);
+        $changelog .= PHP_EOL;
+        $changelog .= PHP_EOL . 'Core Contributers: ' . count($coreContributers);
+        $changelog .= PHP_EOL;
+        $changelog .= PHP_EOL;
+        $changelog .= implode(PHP_EOL, $coreContributers);
+        $changelog .= PHP_EOL;
+        $changelog .= PHP_EOL . 'Contributers: ' . (count($contributors) + count($coreContributers));
     }
 
     return $changelog;
 }
 
+function getClient(): HttpClientInterface
+{
+    /** @var string|null $githubToken */
+    $githubToken = getenv('GITHUB_TOKEN') ?: null;
+
+    $headers = [];
+    if ($githubToken) {
+        $headers[] = 'Authorization: Bearer ' . $githubToken;
+    }
+
+    return HttpClient::create([
+        'headers' => $headers,
+    ]);
+}
+
 function getCommits($repository, $range): \Generator
 {
-    $client = HttpClient::create();
+    $client = getClient();
 
     $parameters = ['per_page' => '250'];
     $page = 1;
+
 
     do {
         $parameters['page'] = (string) $page++;
