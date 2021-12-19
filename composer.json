@@ -4,13 +4,14 @@
     "type": "project",
     "require": {
         "php": "^7.4 || ^8.0",
-        "symfony/console": "^5.2",
-        "symfony/process": "^5.2",
-        "symfony/filesystem": "^5.2",
-        "symfony/http-client": "^5.2"
+        "symfony/console": "^5.4",
+        "symfony/process": "^5.4",
+        "symfony/filesystem": "^5.4",
+        "symfony/http-client": "^5.4"
     },
     "license": "MIT",
     "require-dev": {
-        "symfony/var-dumper": "^5.2"
-    }
+        "symfony/var-dumper": "^5.4"
+    },
+    "bin": ["bin/generate-changelog", "bin/tag-release"]
 }
