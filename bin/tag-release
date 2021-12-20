@@ -27,7 +27,9 @@ function cloneRepository(SymfonyStyle $ui, string $directory, string $branch, st
             $branch,
             $directory
         )
-    ))->run();
+    ))
+        ->setTimeout(3600) // increase timeout as default timeout is 60 seconds in symfony process component
+        ->run();
 
     $ui->text(\sprintf('Finished cloning repository "%s" into "%s".', $repository, $directory));
 }
@@ -119,8 +121,8 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
 
         $ui->text(\sprintf('Start tagging "%s" branch.', $branch));
 
-        $directory = dirname(__DIR__) . '/var/releases/' . $branch;
-        $suluDirectory = $directory . '/' . $repository;
+        $directory = dirname(__DIR__) . '/var/releases';
+        $suluDirectory = $directory . '/' . $repository . '/' . $branch;
 
         cloneRepository($ui, $suluDirectory, $branch, $repository);
 

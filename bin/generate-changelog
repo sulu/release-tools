@@ -14,6 +14,21 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 require __DIR__.'/../vendor/autoload.php';
 
+function getClient(): HttpClientInterface
+{
+    /** @var string|null $githubToken */
+    $githubToken = getenv('GITHUB_TOKEN') ?: null;
+
+    $headers = [];
+    if ($githubToken) {
+        $headers[] = 'Authorization: Bearer ' . $githubToken;
+    }
+
+    return HttpClient::create([
+        'headers' => $headers,
+    ]);
+}
+
 function getChangelog(SymfonyStyle $ui, string $repository, $range): string
 {
     /** @var string $futureVersion */
@@ -52,6 +67,7 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
 
         if (0 === \strpos($message, 'Merge branch \'')
             || 0 === \strpos($message, 'Merge remote-tracking branch \'')
+            || 0 === \strpos($message, 'Merge pull request  \'')
         ) {
             continue;
         }
@@ -123,28 +139,12 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
     return $changelog;
 }
 
-function getClient(): HttpClientInterface
-{
-    /** @var string|null $githubToken */
-    $githubToken = getenv('GITHUB_TOKEN') ?: null;
-
-    $headers = [];
-    if ($githubToken) {
-        $headers[] = 'Authorization: Bearer ' . $githubToken;
-    }
-
-    return HttpClient::create([
-        'headers' => $headers,
-    ]);
-}
-
 function getCommits($repository, $range): \Generator
 {
     $client = getClient();
 
     $parameters = ['per_page' => '250'];
     $page = 1;
-
 
     do {
         $parameters['page'] = (string) $page++;
