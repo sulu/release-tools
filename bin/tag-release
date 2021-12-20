@@ -28,7 +28,7 @@ function cloneRepository(SymfonyStyle $ui, string $directory, string $branch, st
             $directory
         )
     ))
-        ->setTimeout(3600)
+        ->setTimeout(3600) // increase timeout as default timeout is 60 seconds in symfony process component
         ->run();
 
     $ui->text(\sprintf('Finished cloning repository "%s" into "%s".', $repository, $directory));
