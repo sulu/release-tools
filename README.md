@@ -1,13 +1,13 @@
 # Release Tools
 
-Tools used to create new release for our packages.
+Tools used to create new release for our packages. Can be used for any Github Package to create release tags and changelogs.
 
 ## Tag a new Release
 
 To tag a new version on a specific branch the following command can be used:
 
 ```bash
-bin/release sulu/sulu 2.x
+bin/tag-release sulu/sulu 2.x
 ```
 
 ## Generate Changelog
