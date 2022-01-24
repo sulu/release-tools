@@ -69,7 +69,7 @@ function getPreviousTag(SymfonyStyle $ui, string $directory, string $branch): ?s
 
     $previousTag = null;
     foreach ($equalTags as $equalTag) {
-        if ($previousTag === null || version_compare($previousTag, $equalTag, '<')) {
+        if ($previousTag === null || version_compare(trim($previousTag, 'v'), trim($equalTag, 'v'), '<')) {
             $previousTag = $equalTag;
         }
     }
