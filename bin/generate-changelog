@@ -62,8 +62,36 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
 
     $lines = [];
     $contributors = [];
+
+    [$beforeTag, $afterTag] = \explode('...', $range, 2);
+    $beforeTagMajor = (int) \explode('.', $beforeTag)[0];
+    $afterTagMajor = (int) \explode('.', $afterTag)[0];
+
+    $otherBundlesCommits = null;
+    $skippedCommitsCounter = 0;
     foreach (getCommits($repository, $range) as $commit) {
         $message = \explode("\n", $commit['commit']['message'], 2)[0];
+
+        // FIXME hack to avoid SuluArticleBundle SuluContentBundle commits reshown in sulu/sulu changelog
+        if ($repository === 'sulu/sulu'
+            && $beforeTagMajor === 2
+            && $afterTagMajor === 3
+        ) {
+            if ($otherBundlesCommits === null) {
+                $otherBundlesCommits = [
+                    ...getAllCommits('sulu/SuluArticleBundle'),
+                    ...getAllCommits('sulu/SuluContentBundle'),
+                ];
+            }
+
+            foreach ($otherBundlesCommits as $otherBundlesCommit) {
+                if ($otherBundlesCommit['sha'] === $commit['sha']) {
+                    ++$skippedCommitsCounter;
+
+                    continue 2;
+                }
+            }
+        }
 
         if (0 === \strpos($message, 'Merge branch \'')
             || 0 === \strpos($message, 'Merge remote-tracking branch \'')
@@ -123,6 +151,8 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
         $changelog .= PHP_EOL;
         $changelog .= PHP_EOL . 'Merged Pull Requests: ' . count($lines);
         $changelog .= PHP_EOL;
+        $changelog .= PHP_EOL . 'Skipped Commits: ' . $skippedCommitsCounter;
+        $changelog .= PHP_EOL;
         $changelog .= PHP_EOL . 'External Contributers: ' . count($contributors);
         $changelog .= PHP_EOL;
         $changelog .= PHP_EOL;
@@ -143,7 +173,7 @@ function getCommits($repository, $range): \Generator
 {
     $client = getClient();
 
-    $parameters = ['per_page' => '250'];
+    $parameters = ['per_page' => '100'];
     $page = 1;
 
     do {
@@ -169,7 +199,38 @@ function getCommits($repository, $range): \Generator
         foreach ($commits as $commit) {
             yield $commit;
         }
-    } while (250 === \count($commits));
+    } while (100 === \count($commits));
+}
+
+function getAllCommits($repository): \Generator
+{
+    $client = getClient();
+
+    $parameters = ['per_page' => '100'];
+    $page = 1;
+
+    do {
+        $parameters['page'] = (string) $page++;
+
+        $url = \sprintf(
+            'https://api.github.com/repos/%s/commits?%s',
+            $repository,
+            http_build_query($parameters)
+        );
+
+        $response = $client->request('GET', $url);
+
+        if (200 !== $response->getStatusCode()) {
+            throw new \RuntimeException(\sprintf('Could not load data from "%s".', $url));
+        }
+
+        $jsonString = $response->getContent();
+        $commits = \json_decode($jsonString, true);
+
+        foreach ($commits as $commit) {
+            yield $commit;
+        }
+    } while (100 === \count($commits));
 }
 
 (new SingleCommandApplication())
