@@ -44,7 +44,7 @@ function getChangelog(SymfonyStyle $ui, string $repository, $range): string
     }
 
     if (\in_array($repository, ['sulu/sulu', 'sulu/skeleton'])) {
-        $links[] = '[Upgrade Guide](https://docs.sulu.io/en/latest/upgrades/upgrade-2.x.html)';
+        $links[] = '[Upgrade Guide](https://docs.sulu.io/en/latest/upgrades/upgrade-' . (int) \ltrim($futureVersion, 'v') . '.x.html)';
     }
 
     if (\in_array($repository, ['sulu/sulu', 'sulu/skeleton'])) {
