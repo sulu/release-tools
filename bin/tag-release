@@ -12,6 +12,25 @@ use Symfony\Component\Process\Process;
 
 require __DIR__.'/../vendor/autoload.php';
 
+function runCommand(string $command, ?string $directory = null, int $timeout = 60): string
+{
+    $process = Process::fromShellCommandline($command, $directory);
+    $process->setTimeout($timeout);
+    $process->run();
+
+    if (!$process->isSuccessful()) {
+        throw new \RuntimeException(\sprintf(
+            'Command "%s" failed with exit code %s:%s%s',
+            $command,
+            $process->getExitCode(),
+            \PHP_EOL,
+            \trim($process->getErrorOutput() ?: $process->getOutput())
+        ));
+    }
+
+    return $process->getOutput();
+}
+
 function cloneRepository(SymfonyStyle $ui, string $directory, string $branch, string $repository): void
 {
     $filesystem = new Filesystem();
@@ -20,21 +39,43 @@ function cloneRepository(SymfonyStyle $ui, string $directory, string $branch, st
     }
 
     $ui->section(\sprintf('Cloning repository "%s":', $repository));
-    (Process::fromShellCommandline(
+    runCommand(
         \sprintf(
             'git clone git@github.com:%s.git --branch %s %s',
             $repository,
             $branch,
             $directory
-        )
-    ))
-        ->setTimeout(3600) // increase timeout as default timeout is 60 seconds in symfony process component
-        ->run();
+        ),
+        null,
+        3600 // increase timeout as default timeout is 60 seconds in symfony process component
+    );
 
     $ui->text(\sprintf('Finished cloning repository "%s" into "%s".', $repository, $directory));
 }
 
-function getNewTag(SymfonyStyle $ui, string $directory, string $branch, string $previousTag): ?string
+function assertHeadIsNotTagged(string $directory, string $branch): void
+{
+    $tags = \trim(runCommand('git tag --points-at HEAD', $directory));
+
+    if ('' !== $tags) {
+        throw new \RuntimeException(\sprintf(
+            'The head of branch "%s" is already tagged with "%s", there is nothing new to release.',
+            $branch,
+            \str_replace(\PHP_EOL, ', ', $tags)
+        ));
+    }
+}
+
+function assertTagDoesNotExist(string $directory, string $tag): void
+{
+    if ('' !== \trim(runCommand(\sprintf('git tag --list %s', \escapeshellarg($tag)), $directory))
+        || '' !== \trim(runCommand(\sprintf('git ls-remote --tags origin %s', \escapeshellarg('refs/tags/' . $tag)), $directory))
+    ) {
+        throw new \RuntimeException(\sprintf('The tag "%s" already exists.', $tag));
+    }
+}
+
+function getNewTag(SymfonyStyle $ui, string $directory, string $branch, ?string $previousTag): ?string
 {
     $newTag = null;
     if ($previousTag) {
@@ -52,9 +93,7 @@ function getNewTag(SymfonyStyle $ui, string $directory, string $branch, string $
 
 function getPreviousTag(SymfonyStyle $ui, string $directory, string $branch): ?string
 {
-    $process = Process::fromShellCommandline('git tag --list', $directory);
-    $process->run();
-    $tags = explode(\PHP_EOL, $process->getOutput());
+    $tags = \explode(\PHP_EOL, \trim(runCommand('git tag --list', $directory)));
 
     $equalTags = [];
     foreach ($tags as $tag) {
@@ -86,16 +125,14 @@ function getPreviousTag(SymfonyStyle $ui, string $directory, string $branch): ?s
 function setTag(SymfonyStyle $ui, string $directory, string $branch, $tag): void
 {
     $ui->section(\sprintf('Set tag "%s" on %s:', $tag, $branch));
-    $process = Process::fromShellCommandline(\sprintf('git tag %s', $tag), $directory);
-    $process->run();
+    runCommand(\sprintf('git tag %s', \escapeshellarg($tag)), $directory);
     $ui->text(\sprintf('Use tag "%s".', $tag));
 }
 
 function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): void
 {
     $ui->section(\sprintf('Push tag "%s" on %s:', $tag, $branch));
-    $process = Process::fromShellCommandline(\sprintf('git push origin %s', $tag), $directory);
-    $process->run();
+    runCommand(\sprintf('git push origin %s', \escapeshellarg($tag)), $directory, 300);
     $ui->success(\sprintf('Pushed tag "%s".', $tag));
 }
 
@@ -105,11 +142,16 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
     ->addArgument('repository', InputArgument::REQUIRED)
     ->addArgument('branch', InputArgument::REQUIRED)
     ->addOption('--dry-run', null, InputOption::VALUE_NONE)
+    ->addOption('--yes', null, InputOption::VALUE_NONE, 'Accept the default answer of every question, required when no one can answer them')
     ->setCode(function (InputInterface $input, OutputInterface $output) {
         $ui = new SymfonyStyle($input, $output);
         $repository = $input->getArgument('repository');
         $branch = $input->getArgument('branch');
         $dryRun = $input->getOption('dry-run');
+
+        if (!$input->isInteractive() && !$input->getOption('yes')) {
+            throw new \RuntimeException('Without a terminal every question would be answered with its default. Run the command in a terminal or pass --yes to accept the defaults.');
+        }
 
         $ui->section('Configuration');
 
@@ -125,6 +167,7 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
         $suluDirectory = $directory . '/' . $repository . '/' . $branch;
 
         cloneRepository($ui, $suluDirectory, $branch, $repository);
+        assertHeadIsNotTagged($suluDirectory, $branch);
 
         if ('y' !== \strtolower($ui->ask(\sprintf('Are all previous releases merged into the current branch?'), 'y'))) {
             $ui->text('Canceled by user.');
@@ -161,6 +204,7 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
         $ui->section(\sprintf('Tagging branch %s:', $branch));
         $previousTag = getPreviousTag($ui, $suluDirectory, $branch);
         $newTag = getNewTag($ui, $suluDirectory, $branch, $previousTag);
+        assertTagDoesNotExist($suluDirectory, $newTag);
         setTag($ui, $suluDirectory, $branch, $newTag);
 
         if ('y' !== \strtolower($ui->ask(\sprintf('Push tag "%s" on "%s" to remote?', $newTag, $branch), 'y'))) {
@@ -183,4 +227,6 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
         }
 
         pushTag($ui, $suluDirectory, $branch, $newTag);
+
+        return 0;
     })->run();
