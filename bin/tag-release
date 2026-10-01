@@ -225,10 +225,23 @@ function findReleaseProblems(string $directory, string $repository, ?string $pre
     return $problems;
 }
 
+function isVersionBranch(string $branch): bool
+{
+    return (bool) \preg_match('/^\d+(\.\d+)?$/', $branch);
+}
+
+function belongsToBranch(string $tag, string $branch): bool
+{
+    return 0 === \strpos(\ltrim($tag, 'v'), $branch . '.');
+}
+
 function getNewTag(SymfonyStyle $ui, string $directory, string $branch, ?string $previousTag): ?string
 {
     $newTag = null;
-    if ($previousTag) {
+    if ($previousTag && isVersionBranch($branch) && !belongsToBranch($previousTag, $branch)) {
+        // first release of a new version, e.g. 3.1.0 after 3.0.12
+        $newTag = (0 === \strpos($previousTag, 'v') ? 'v' : '') . $branch . '.0';
+    } elseif ($previousTag) {
         $parts = \explode('.', $previousTag, 3);
 
         $newTag = $parts[0] . '.' . $parts[1] . '.' . (++$parts[2]);
@@ -247,8 +260,17 @@ function getPreviousTag(SymfonyStyle $ui, string $directory, string $branch): ?s
 
     $equalTags = [];
     foreach ($tags as $tag) {
-        if (0 === \strpos($tag, $branch)) {
+        if (belongsToBranch($tag, $branch)) {
             $equalTags[] = $tag;
+        }
+    }
+
+    if (empty($equalTags) && isVersionBranch($branch)) {
+        // first release of a new version, e.g. 3.1: the previous tag is the latest one below it
+        foreach ($tags as $tag) {
+            if (\version_compare(\ltrim($tag, 'v'), $branch . '.0-dev', '<')) {
+                $equalTags[] = $tag;
+            }
         }
     }
 
