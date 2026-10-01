@@ -75,6 +75,156 @@ function assertTagDoesNotExist(string $directory, string $tag): void
     }
 }
 
+function isMerged(string $directory, string $commit, string $into = 'HEAD'): bool
+{
+    $process = Process::fromShellCommandline(\sprintf('git merge-base --is-ancestor %s %s', \escapeshellarg($commit), \escapeshellarg($into)), $directory);
+    $process->run();
+
+    return $process->isSuccessful();
+}
+
+function isReleasedWith(string $directory, string $version, string $tag): bool
+{
+    foreach ([$version, 'v' . $version] as $candidate) {
+        $process = Process::fromShellCommandline(\sprintf('git rev-parse -q --verify %s', \escapeshellarg('refs/tags/' . $candidate)), $directory);
+        $process->run();
+
+        if ($process->isSuccessful()) {
+            return isMerged($directory, $candidate, $tag);
+        }
+    }
+
+    return false;
+}
+
+function isDevConstraint(string $constraint): bool
+{
+    foreach (\preg_split('/\s*\|\|?\s*/', \trim($constraint)) as $alternative) {
+        if (!\preg_match('/(@dev|-dev)$|^dev-/', \trim($alternative))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * @return string[]
+ */
+function findDevDependencies(string $directory): array
+{
+    $composer = \json_decode(\file_get_contents($directory . '/composer.json'), true);
+
+    $problems = [];
+    foreach (['require', 'require-dev'] as $section) {
+        foreach ($composer[$section] ?? [] as $package => $constraint) {
+            if (isDevConstraint($constraint)) {
+                $problems[] = \sprintf('The composer.json requires "%s": "%s" in "%s", which only allows a development version.', $package, $constraint, $section);
+            }
+        }
+    }
+
+    return $problems;
+}
+
+/**
+ * Finds upgrade notes added under a version which the previous tag already contains and sections of versions which are not released yet.
+ *
+ * @return string[]
+ */
+function findUpgradeNoteProblems(string $directory, ?string $previousTag, string $newTag): array
+{
+    $problems = [];
+    // the section of a release candidate is the one of the release, so compare without the suffix
+    $new = \preg_replace('/-.*$/', '', \ltrim($newTag, 'v'));
+
+    foreach (\glob($directory . '/UPGRADE-*.x.md') as $path) {
+        $file = \basename($path);
+        $lines = \file($path, \FILE_IGNORE_NEW_LINES);
+
+        $headings = [];
+        foreach ($lines as $index => $line) {
+            if (\preg_match('/^## (.+)$/', $line, $heading)) {
+                $headings[$index + 1] = $heading[1];
+            }
+        }
+
+        foreach ($headings as $line => $heading) {
+            $isVersion = \preg_match('/^v?(\d+\.\d+\.\d+\S*)/', $heading, $version);
+            if (($isVersion && \version_compare($version[1], $new, '>')) || \preg_match('/\bunreleased\b|-dev\b|\bdev-/i', $heading)) {
+                $problems[] = \sprintf('%s:%d has the section "%s", which is not released yet.', $file, $line, $heading);
+            }
+        }
+
+        if (!$previousTag) {
+            continue;
+        }
+
+        $diff = runCommand(\sprintf('git diff --unified=0 %s HEAD -- %s', \escapeshellarg($previousTag), \escapeshellarg($file)), $directory);
+        $reported = [];
+        foreach (\explode(\PHP_EOL, $diff) as $diffLine) {
+            if (!\preg_match('/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/', $diffLine, $range) || (isset($range[2]) && '0' === $range[2])) {
+                continue;
+            }
+
+            $heading = null;
+            foreach ($headings as $line => $text) {
+                if ($line <= (int) $range[1]) {
+                    $heading = $text;
+                }
+            }
+
+            if (null !== $heading
+                && !isset($reported[$heading])
+                && \preg_match('/^v?(\d+\.\d+\.\d+\S*)/', $heading, $version)
+                && isReleasedWith($directory, $version[1], $previousTag)
+            ) {
+                $reported[$heading] = true;
+                $problems[] = \sprintf('%s:%d was changed under the section "%s", which is already part of "%s".', $file, $range[1], $heading, $previousTag);
+            }
+        }
+    }
+
+    return $problems;
+}
+
+function findSuluConstraintProblem(string $directory, string $newTag): ?string
+{
+    $version = \ltrim($newTag, 'v');
+    if (!\preg_match('/^\d+\.\d+\.\d+$/', $version)) {
+        return null;
+    }
+
+    $composer = \json_decode(\file_get_contents($directory . '/composer.json'), true);
+    $constraint = $composer['require']['sulu/sulu'] ?? null;
+
+    if ('~' . $version === $constraint) {
+        return null;
+    }
+
+    return \sprintf('The composer.json requires "sulu/sulu": "%s", expected "~%s".', $constraint ?? 'nothing', $version);
+}
+
+/**
+ * @return string[]
+ */
+function findReleaseProblems(string $directory, string $repository, ?string $previousTag, string $newTag): array
+{
+    $problems = [];
+
+    if ($previousTag && !isMerged($directory, $previousTag)) {
+        $problems[] = \sprintf('The previous tag "%s" is not merged into this branch.', $previousTag);
+    }
+
+    $problems = \array_merge($problems, findDevDependencies($directory), findUpgradeNoteProblems($directory, $previousTag, $newTag));
+
+    if ('sulu/skeleton' === $repository && $problem = findSuluConstraintProblem($directory, $newTag)) {
+        $problems[] = $problem;
+    }
+
+    return $problems;
+}
+
 function getNewTag(SymfonyStyle $ui, string $directory, string $branch, ?string $previousTag): ?string
 {
     $newTag = null;
@@ -169,31 +319,23 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
         cloneRepository($ui, $suluDirectory, $branch, $repository);
         assertHeadIsNotTagged($suluDirectory, $branch);
 
-        if ('y' !== \strtolower($ui->ask(\sprintf('Are all previous releases merged into the current branch?'), 'y'))) {
-            $ui->text('Canceled by user.');
+        $ui->section(\sprintf('Tagging branch %s:', $branch));
+        $previousTag = getPreviousTag($ui, $suluDirectory, $branch);
+        $newTag = getNewTag($ui, $suluDirectory, $branch, $previousTag);
+        assertTagDoesNotExist($suluDirectory, $newTag);
 
-            return 0;
-        }
+        $problems = findReleaseProblems($suluDirectory, $repository, $previousTag, $newTag);
+        if ($problems) {
+            $ui->warning($problems);
 
-        if ('y' !== \strtolower($ui->ask(\sprintf('Is the UPGRADE.md up to date and does not contain an unreleased section?'), 'y'))) {
-            $ui->text('Canceled by user.');
+            if ('y' !== \strtolower($ui->ask('Continue anyway?', 'n'))) {
+                $ui->text('Canceled because of the problems above.');
 
-            return 0;
-        }
-
-        if ('y' !== \strtolower($ui->ask(\sprintf('Is the composer.json up to date and does not contain @dev dependencies?'), 'y'))) {
-            $ui->text('Canceled by user.');
-
-            return 0;
+                return 1;
+            }
         }
 
         if ($repository === 'sulu/skeleton') {
-            if ('y' !== \strtolower($ui->ask(\sprintf('Does the composer.json contain the correct version of the "sulu/sulu" package?'), 'y'))) {
-                $ui->text('Canceled by user.');
-
-                return 0;
-            }
-
             if ('y' !== \strtolower($ui->ask(\sprintf('Is the "public/build/admin" directory up to date?'), 'y'))) {
                 $ui->text('Canceled by user.');
 
@@ -201,10 +343,6 @@ function pushTag(SymfonyStyle $ui, string $directory, string $branch, $tag): voi
             }
         }
 
-        $ui->section(\sprintf('Tagging branch %s:', $branch));
-        $previousTag = getPreviousTag($ui, $suluDirectory, $branch);
-        $newTag = getNewTag($ui, $suluDirectory, $branch, $previousTag);
-        assertTagDoesNotExist($suluDirectory, $newTag);
         setTag($ui, $suluDirectory, $branch, $newTag);
 
         if ('y' !== \strtolower($ui->ask(\sprintf('Push tag "%s" on "%s" to remote?', $newTag, $branch), 'y'))) {
